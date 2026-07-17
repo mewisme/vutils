@@ -6,6 +6,8 @@ project_name: vutils
 before:
   hooks:
     - go mod tidy
+    # Embed icon.ico into windows/amd64 PE (Go links *_windows_amd64.syso automatically).
+    - go run github.com/akavel/rsrc@v0.10.2 -ico icon.ico -arch amd64 -o rsrc_windows_amd64.syso
 
 builds:
   - id: vutils

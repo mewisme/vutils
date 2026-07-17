@@ -32,6 +32,11 @@ scoop install https://github.com/mewisme/vutils/releases/latest/download/vutils.
 **From source:**
 
 ```bash
+# Windows: build.bat embeds icon.ico then builds
+build.bat
+
+# or manually:
+go run github.com/akavel/rsrc@v0.10.2 -ico icon.ico -arch amd64 -o rsrc_windows_amd64.syso
 go build -ldflags="-H windowsgui -X github.com/mewisme/vutils/internal/version.Version=dev" -o vutils.exe .
 ```
 

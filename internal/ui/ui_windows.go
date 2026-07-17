@@ -186,6 +186,11 @@ func registerMainClass(instance win.HINSTANCE) error {
 	wc.HCursor = win.LoadCursor(0, win.MAKEINTRESOURCE(win.IDC_ARROW))
 	wc.HbrBackground = win.COLOR_BTNFACE + 1
 	wc.LpszClassName = utf16Ptr(classMain)
+	// ID 1 = icon from rsrc_windows_amd64.syso (built from icon.ico).
+	if h := win.LoadIcon(instance, win.MAKEINTRESOURCE(1)); h != 0 {
+		wc.HIcon = h
+		wc.HIconSm = h
+	}
 	if atom := win.RegisterClassEx(&wc); atom == 0 {
 		if e := win.GetLastError(); e != 1410 {
 			return fmt.Errorf("RegisterClassEx main: %d", e)
