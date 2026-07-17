@@ -1,0 +1,15 @@
+{
+  "mapX": 30,
+  "mapY": 30,
+  "mapW": 300,
+  "mapH": 300,
+  "step": 5,
+  "thickness": 1,
+  "opacity": 0.6,
+  "color": "#00FFFF",
+  "enabled": false,
+  "calibration": false,
+  "circleMode": false,
+  "showHorizontal": true,
+  "showVertical": true
+}

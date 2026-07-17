@@ -33,7 +33,6 @@ archives:
     formats: [zip]
     name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
     files:
-      - config.json
       - README.md
       - LICENSE*
 

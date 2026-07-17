@@ -3,10 +3,18 @@ package config_test
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/mewisme/vutils/internal/config"
 )
+
+func TestDefaultPath(t *testing.T) {
+	p := config.DefaultPath()
+	if !strings.Contains(filepath.ToSlash(p), ".vutils/config.json") {
+		t.Fatalf("path: %s", p)
+	}
+}
 
 func TestDefaultAndValidate(t *testing.T) {
 	c := config.Default()
@@ -46,7 +54,16 @@ func TestLoadOrDefaultMissing(t *testing.T) {
 	if got.MapW != 300 {
 		t.Fatalf("expected defaults, got %+v", got)
 	}
-	_ = os.Remove(path)
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("expected config written: %v", err)
+	}
+	again, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again.MapW != 300 || again.Color != "#00FFFF" {
+		t.Fatalf("reloaded %+v", again)
+	}
 }
 
 func TestLoadDefaultsShowLinesWhenOmitted(t *testing.T) {

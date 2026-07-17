@@ -9,7 +9,7 @@ Standalone Windows overlay for aligning a minimap guide — crosshair lines over
 - **Calibration mode** — rectangle or circle border so you can match the in-game minimap box
 - **Position & size** — D-pad nudge with configurable step; W/H resize keeps the crosshair center fixed
 - **Style** — hex color, color picker, thickness, opacity slider; changes apply live
-- **Persisted config** — save/reset; settings stored beside the exe as `config.json`
+- **Persisted config** — save/reset; auto-created at `~/.vutils/config.json` on first run
 - **Updates** — Help → Check for Updates against GitHub releases
 
 Standalone only: draws on your screen at coordinates you set. No game process access.

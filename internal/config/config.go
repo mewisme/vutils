@@ -1,6 +1,7 @@
 package config
 
 import (
+	_ "embed"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -8,6 +9,9 @@ import (
 	"regexp"
 	"strings"
 )
+
+//go:embed default.json
+var defaultJSON []byte
 
 // OverlayConfig is the persisted minimap guide overlay settings.
 type OverlayConfig struct {
@@ -28,23 +32,19 @@ type OverlayConfig struct {
 
 var colorRe = regexp.MustCompile(`(?i)^#[0-9a-f]{6}$`)
 
-// Default returns the shipped default overlay config.
+// Default returns the embedded default overlay config.
 func Default() OverlayConfig {
-	return OverlayConfig{
-		MapX:           30,
-		MapY:           30,
-		MapW:           300,
-		MapH:           300,
-		Step:           5,
-		Thickness:      1,
-		Opacity:        0.6,
-		Color:          "#00FFFF",
-		Enabled:        false,
-		Calibration:    false,
-		CircleMode:     false,
-		ShowHorizontal: true,
-		ShowVertical:   true,
+	var c OverlayConfig
+	if err := json.Unmarshal(defaultJSON, &c); err != nil {
+		// Embedded JSON is compile-time checked; fall back if somehow broken.
+		return OverlayConfig{
+			MapX: 30, MapY: 30, MapW: 300, MapH: 300,
+			Step: 5, Thickness: 1, Opacity: 0.6, Color: "#00FFFF",
+			ShowHorizontal: true, ShowVertical: true,
+		}
 	}
+	c, _ = Validate(c)
+	return c
 }
 
 // Validate checks config values and returns a sanitized copy or an error.
@@ -113,40 +113,32 @@ func Save(path string, c OverlayConfig) error {
 	return os.WriteFile(path, data, 0o644)
 }
 
-// PathBesideExecutable returns config.json next to the binary, or cwd fallback.
-func PathBesideExecutable() string {
-	exe, err := os.Executable()
-	if err != nil {
-		return "config.json"
+// DefaultPath returns ~/.vutils/config.json (user home).
+func DefaultPath() string {
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return filepath.Join(".vutils", "config.json")
 	}
-	exe, err = filepath.EvalSymlinks(exe)
-	if err != nil {
-		return filepath.Join(filepath.Dir(exe), "config.json")
-	}
-	return filepath.Join(filepath.Dir(exe), "config.json")
+	return filepath.Join(home, ".vutils", "config.json")
 }
 
-// LoadOrDefault loads path, or returns Default if the file is missing.
+// LoadOrDefault loads path, or writes and returns Default if the file is missing.
 func LoadOrDefault(path string) (OverlayConfig, error) {
 	c, err := Load(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return Default(), nil
+			c = Default()
+			if err := Save(path, c); err != nil {
+				return OverlayConfig{}, fmt.Errorf("write default config: %w", err)
+			}
+			return c, nil
 		}
 		return OverlayConfig{}, err
 	}
 	return c, nil
 }
 
-// ResolvePath returns config.json beside the executable when present,
-// otherwise ./config.json for dev (wails dev / go run).
+// ResolvePath returns the config path under the user home (.vutils/config.json).
 func ResolvePath() string {
-	p := PathBesideExecutable()
-	if _, err := os.Stat(p); err == nil {
-		return p
-	}
-	if _, err := os.Stat("config.json"); err == nil {
-		return "config.json"
-	}
-	return p
+	return DefaultPath()
 }
