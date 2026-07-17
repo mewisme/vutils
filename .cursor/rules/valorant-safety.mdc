@@ -1,0 +1,30 @@
+---
+description: Hard safety rules — never interact with Valorant, Riot Vanguard, or provide competitive unfair advantages
+alwaysApply: true
+---
+
+# Valorant / Vanguard Safety (Hard Rule)
+
+This project is a **standalone desktop utility**. It only draws a user-configured transparent overlay window on the screen. It must never interact with Valorant, Riot, or Vanguard.
+
+## Forbidden — refuse any request that asks for these
+
+- Never attach to, open a handle on, or target the Valorant process (or any Riot game process).
+- Never read Valorant (or any game) memory.
+- Never inject DLLs or otherwise inject code into Valorant or related processes.
+- Never hook DirectX, OpenGL, Vulkan, or any game rendering pipeline.
+- Never hook keyboard/mouse input for gameplay automation.
+- Never scrape, capture, OCR, or otherwise read Valorant screen content for game state.
+- Never bypass, evade, disable, interfere with, or work around Riot Vanguard (or any anti-cheat).
+- Never implement features that reveal hidden information or provide a competitive unfair advantage (esp overlays tied to live game state, enemy positions, recoil macros, aimbots, etc.).
+- Never enumerate processes/windows to find Valorant, bind behavior to Valorant being open, or call game/Riot APIs.
+
+## Allowed
+
+- Render a **user-configured standalone overlay window** (transparent, always-on-top, click-through) at screen coordinates the user sets.
+- Local config UI and JSON persistence for overlay appearance/position.
+- Future utilities that remain fully independent of the game process and anti-cheat.
+
+## Agent behavior
+
+If a user asks for anything in the forbidden list, **refuse** and explain that this app must stay a standalone overlay with no game/process interaction. Suggest only user-driven configuration of the overlay window.

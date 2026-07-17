@@ -1,0 +1,69 @@
+# yaml-language-server: $schema=https://goreleaser.com/static/schema.json
+version: 2
+
+project_name: vutils
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: vutils
+    main: .
+    binary: vutils
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - windows
+    goarch:
+      - amd64
+    ldflags:
+      - -s -w -H windowsgui -X github.com/mewisme/vutils/internal/version.Version={{.Version}}
+
+upx:
+  - enabled: true
+    ids: [vutils]
+    goos: [windows]
+    goarch: [amd64]
+    compress: best
+    lzma: true
+
+archives:
+  - id: default
+    formats: [zip]
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - config.json
+      - README.md
+      - LICENSE*
+
+checksum:
+  name_template: checksums.txt
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+
+release:
+  draft: false
+  prerelease: auto
+
+# Attach vutils.json to the GitHub release via CI (see release.yml).
+# scoops generates the file; skip_upload skips scoop-bucket push (scoop-mew syncs the release asset).
+# https://goreleaser.com/customization/publish/scoop/
+scoops:
+  - name: vutils
+    url_template: "https://github.com/mewisme/vutils/releases/download/{{ .Tag }}/{{ .ArtifactName }}"
+    homepage: "https://github.com/mewisme/vutils"
+    description: "Standalone Windows minimap guide overlay (no Valorant process access)"
+    license: MIT
+    goamd64: v1
+    skip_upload: true
+    repository:
+      owner: mewisme
+      name: scoop-mew
+      branch: main

@@ -1,0 +1,54 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  goreleaser:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      - name: Install UPX
+        run: sudo apt-get update && sudo apt-get install -y upx-ucl
+
+      - uses: goreleaser/goreleaser-action@v7
+        with:
+          distribution: goreleaser
+          version: "~> v2"
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # skip_upload: attach scoop manifest for scoop-mew sync.
+      - name: Attach scoop manifest
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          test -f dist/scoop/vutils.json
+          gh release upload "${GITHUB_REF_NAME}" \
+            dist/scoop/vutils.json \
+            --clobber
+
+      # Cross-repo: needs PAT with contents:write (or workflow) on scoop-mew.
+      - name: Trigger scoop-mew sync
+        env:
+          GH_TOKEN: ${{ secrets.PACKAGE_SYNC_TOKEN }}
+        run: |
+          payload=$(jq -n \
+            --arg name "vutils" \
+            --arg tag "${GITHUB_REF_NAME}" \
+            '{event_type:"sync-package",client_payload:{name:$name,tag:$tag}}')
+          echo "$payload" | gh api "repos/${{ github.repository_owner }}/scoop-mew/dispatches" --input -
+          echo "Dispatched sync-package to ${{ github.repository_owner }}/scoop-mew (${GITHUB_REF_NAME})"
