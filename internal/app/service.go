@@ -176,6 +176,31 @@ func (s *Service) CreateProfile(name string) error {
 	return s.overlayMgr.Apply(clone)
 }
 
+// ImportProfile inserts a validated overlay as a new profile and selects it.
+func (s *Service) ImportProfile(name string, cfg config.OverlayConfig) error {
+	name = strings.TrimSpace(name)
+	if err := config.ValidateProfileName(name); err != nil {
+		return err
+	}
+	cfg, err := config.Validate(cfg)
+	if err != nil {
+		return err
+	}
+	s.mu.Lock()
+	if _, exists := s.store.Profiles[name]; exists {
+		s.mu.Unlock()
+		return fmt.Errorf("profile %q already exists", name)
+	}
+	s.store.Profiles[name] = cfg
+	s.store.ActiveProfile = name
+	err = s.persistLocked()
+	s.mu.Unlock()
+	if err != nil {
+		return err
+	}
+	return s.overlayMgr.Apply(cfg)
+}
+
 // RenameProfile renames a profile. Refuses renaming "default".
 func (s *Service) RenameProfile(oldName, newName string) error {
 	oldName = strings.TrimSpace(oldName)

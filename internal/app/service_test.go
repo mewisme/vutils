@@ -79,3 +79,31 @@ func TestProfilesDuplicateRename(t *testing.T) {
 		t.Fatal("expected refuse rename default")
 	}
 }
+
+func TestImportProfile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	svc, err := app.NewService(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer svc.Shutdown()
+
+	code, err := config.Encode("importme", config.Default())
+	if err != nil {
+		t.Fatal(err)
+	}
+	hint, cfg, err := config.Decode(code)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.MapX = 77
+	if err := svc.ImportProfile(hint, cfg); err != nil {
+		t.Fatal(err)
+	}
+	if svc.ActiveProfile() != "importme" || svc.GetConfig().MapX != 77 {
+		t.Fatalf("active=%s cfg=%+v", svc.ActiveProfile(), svc.GetConfig())
+	}
+	if err := svc.ImportProfile("importme", cfg); err == nil {
+		t.Fatal("expected duplicate name error")
+	}
+}

@@ -67,6 +67,8 @@ const (
 	idProfileDelete    = 1105
 	idProfileDuplicate = 1106
 	idProfileRename    = 1107
+	idProfileExport    = 1108
+	idProfileImport    = 1109
 
 	holdTimerID  = 1
 	holdDelayMs  = 400
@@ -305,6 +307,9 @@ func attachMenu(hwnd win.HWND) {
 	appendMenu(profile, win.MF_STRING, uintptr(idProfileNew), "&New Profile…")
 	appendMenu(profile, win.MF_STRING, uintptr(idProfileDuplicate), "Du&plicate…")
 	appendMenu(profile, win.MF_STRING, uintptr(idProfileRename), "&Rename…")
+	appendMenu(profile, win.MF_SEPARATOR, 0, "")
+	appendMenu(profile, win.MF_STRING, uintptr(idProfileExport), "&Export Code…")
+	appendMenu(profile, win.MF_STRING, uintptr(idProfileImport), "&Import Code…")
 	appendMenu(profile, win.MF_SEPARATOR, 0, "")
 	appendMenu(profile, win.MF_STRING, uintptr(idProfileDelete), "&Delete Profile")
 
@@ -572,6 +577,10 @@ func mainWndProc(hwnd win.HWND, msg uint32, wParam, lParam uintptr) uintptr {
 			f.onProfileDuplicate()
 		case idProfileRename:
 			f.onProfileRename()
+		case idProfileExport:
+			f.onProfileExport()
+		case idProfileImport:
+			f.onProfileImport()
 		case idProfileDelete:
 			f.onProfileDelete()
 		case idProfileCombo:
@@ -1229,11 +1238,49 @@ func (f *form) onProfileDelete() {
 	f.setStatus("Deleted " + name)
 }
 
+func (f *form) onProfileExport() {
+	f.flushActiveProfile()
+	code, err := config.Encode(f.svc.ActiveProfile(), f.svc.GetConfig())
+	if err != nil {
+		win.MessageBox(f.hwnd, utf16Ptr(err.Error()), utf16Ptr("Export Code"), win.MB_OK|win.MB_ICONWARNING)
+		return
+	}
+	if showExportCode(f.hwnd, f.font, code) {
+		f.setStatus("Code copied")
+	}
+}
+
+func (f *form) onProfileImport() {
+	code, ok := promptShareCode(f.hwnd, f.font)
+	if !ok {
+		return
+	}
+	hint, cfg, err := config.Decode(code)
+	if err != nil {
+		win.MessageBox(f.hwnd, utf16Ptr(err.Error()), utf16Ptr("Import Code"), win.MB_OK|win.MB_ICONWARNING)
+		return
+	}
+	name, ok := promptProfileName(f.hwnd, f.font, "Import Profile", hint)
+	if !ok {
+		return
+	}
+	if err := f.svc.ImportProfile(name, cfg); err != nil {
+		win.MessageBox(f.hwnd, utf16Ptr(err.Error()), utf16Ptr("Import Code"), win.MB_OK|win.MB_ICONWARNING)
+		return
+	}
+	f.refreshProfileCombo()
+	f.loadFields(f.svc.GetConfig())
+	f.setStatus("Imported " + name)
+}
+
 const (
 	classPrompt    = "VUtilsProfilePrompt"
+	classShareDlg  = "VUtilsShareDlg"
 	idPromptEdit   = 1
 	idPromptOK     = 2
 	idPromptCancel = 3
+	idShareCopy    = 4
+	idShareClose   = 5
 )
 
 type promptState struct {

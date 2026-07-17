@@ -11,7 +11,8 @@ Draws only on your screen at coordinates you set. **No** Valorant / Riot / Vangu
 - **Calibration mode** — rectangle or circle border to match the in-game minimap box
 - **Position & size** — D-pad nudge with configurable step; W/H resize keeps the crosshair center fixed; hold buttons to repeat
 - **Style** — hex color, color picker, thickness, opacity slider; changes apply live
-- **Profiles** — multiple named setups in one config; switch from the dropdown; Profile menu for New / Duplicate / Rename / Delete (`default` is protected)
+- **Profiles** — multiple named setups in one config; switch from the dropdown; Profile menu for New / Duplicate / Rename / Delete / Export / Import (`default` is protected)
+- **Share codes** — export/import a profile as a compact `vutils;…` string
 - **Persisted config** — save/reset; auto-created at `~/.vutils/config.json` on first run; old flat configs migrate automatically
 - **Updates** — Help → Check for Updates against GitHub releases
 
@@ -81,6 +82,18 @@ Path: `~/.vutils/config.json`
 ```
 
 A pre-profiles flat file is rewritten into this shape on first launch after upgrade.
+
+## Share codes
+
+**Profile → Export Code…** copies a shareable string for the active profile. **Profile → Import Code…** pastes one and creates a new profile.
+
+Example:
+
+```
+vutils;1;n;ranked;x;30;y;30;w;300;h;300;s;5;t;1;o;60;c;00FFFF;e;0;k;0;r;0;H;1;V;1
+```
+
+Tags: `n` name hint, `x/y/w/h` rect, `s` step, `t` thickness, `o` opacity 0–100, `c` RRGGBB, `e/k/r` enabled/calibration/circle, `H/V` crosshair arms.
 
 ## License
 
