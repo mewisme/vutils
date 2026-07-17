@@ -54,20 +54,35 @@ const (
 	idSave  = 1040
 	idReset = 1041
 
-	idAboutGitHub = 1100
-	idMenuExit    = 1101
-	idAbout       = 1102
-	idCheckUpdate = 1103
+	idProfileCombo = 1070
+	idStatus       = 1071
+	idFooterCopy   = 1072
+	idFooterVer    = 1073
+
+	idAboutGitHub      = 1100
+	idMenuExit         = 1101
+	idAbout            = 1102
+	idCheckUpdate      = 1103
+	idProfileNew       = 1104
+	idProfileDelete    = 1105
+	idProfileDuplicate = 1106
+	idProfileRename    = 1107
+
+	holdTimerID  = 1
+	holdDelayMs  = 400
+	holdRepeatMs = 60
 )
 
 // Layout constants (client-area coordinates, pixels).
 const (
 	winW = 460 // outer window width
-	winH = 490 // outer window height (includes native menu bar)
+	winH = 552 // outer window height (menu + profile + footer)
 
-	padX      = 14 // left/right page margin
-	padTop    = 0  // Overlay flush under caption
-	padBottom = 12 // empty space below Actions
+	padX            = 14 // left/right page margin
+	padTop          = 0  // Overlay flush under caption
+	padBottom       = 2  // gap above footer
+	footerH         = 22 // status + meta one line
+	padFooterBottom = 2  // empty space under footer
 
 	contentW = 420 // usable width inside margins
 
@@ -84,6 +99,10 @@ const (
 	tbsHorz        = 0x0000
 	tbClass        = "msctls_trackbar32"
 	spiGetWorkArea = 0x0030
+
+	holdNone = 0
+	holdPos  = 1
+	holdSize = 2
 )
 
 type form struct {
@@ -93,10 +112,23 @@ type form struct {
 	previewBrush win.HBRUSH
 	custColors   [16]win.COLORREF // persisted across ChooseColor opens
 	updating     bool             // suppress live-apply while loading fields
+
+	// Hold-to-repeat for D-pad / Size buttons.
+	holdKind      int
+	holdA, holdB  int
+	holdRepeating bool
 }
 
 // formByHWND keeps *form alive for the wndproc without storing Go pointers as uintptr.
 var formByHWND = map[win.HWND]*form{}
+
+// holdBtnOrig / holdBtnForm support subclassed nudge buttons.
+var (
+	holdBtnCallback = syscall.NewCallback(holdBtnProc)
+	holdBtnOrig     = map[win.HWND]uintptr{}
+	holdBtnForm     = map[win.HWND]*form{}
+	holdBtnAct      = map[win.HWND][3]int{} // kind, a, b
+)
 
 // utf16Ptr wraps UTF16PtrFromString for Win32 APIs (NUL in s → empty string).
 func utf16Ptr(s string) *uint16 {
@@ -151,6 +183,7 @@ func (f *form) run() error {
 
 	f.buildControls()
 	f.loadFields(f.svc.GetConfig())
+	f.refreshProfileCombo()
 
 	if err := f.svc.Start(); err != nil {
 		win.MessageBox(hwnd, utf16Ptr(err.Error()), utf16Ptr("Valorant Utils"), win.MB_OK|win.MB_ICONERROR)
@@ -268,6 +301,13 @@ func attachMenu(hwnd win.HWND) {
 	appendMenu(file, win.MF_SEPARATOR, 0, "")
 	appendMenu(file, win.MF_STRING, uintptr(idMenuExit), "E&xit")
 
+	profile := win.CreatePopupMenu()
+	appendMenu(profile, win.MF_STRING, uintptr(idProfileNew), "&New Profile…")
+	appendMenu(profile, win.MF_STRING, uintptr(idProfileDuplicate), "Du&plicate…")
+	appendMenu(profile, win.MF_STRING, uintptr(idProfileRename), "&Rename…")
+	appendMenu(profile, win.MF_SEPARATOR, 0, "")
+	appendMenu(profile, win.MF_STRING, uintptr(idProfileDelete), "&Delete Profile")
+
 	help := win.CreatePopupMenu()
 	appendMenu(help, win.MF_STRING, uintptr(idCheckUpdate), "Check for &Updates…")
 	appendMenu(help, win.MF_SEPARATOR, 0, "")
@@ -275,6 +315,7 @@ func attachMenu(hwnd win.HWND) {
 	appendMenu(help, win.MF_STRING, uintptr(idAboutGitHub), "&GitHub: mewisme/vutils")
 
 	appendMenu(bar, win.MF_POPUP, uintptr(file), "&File")
+	appendMenu(bar, win.MF_POPUP, uintptr(profile), "&Profile")
 	appendMenu(bar, win.MF_POPUP, uintptr(help), "&Help")
 	win.SetMenu(hwnd, bar)
 	win.DrawMenuBar(hwnd)
@@ -332,8 +373,15 @@ func (f *form) buildControls() {
 	// Start flush at top; padBottom leaves space under Actions via winH.
 	y := int32(padTop)
 
+	// --- 0. Profile ---
+	groupH := int32(48)
+	groupBox("Profile", padX, y, contentW, groupH)
+	add("STATIC", "Active", 0, 0, padX+12, y+18, 44, rowH, 0)
+	add("COMBOBOX", "", win.CBS_DROPDOWNLIST|win.WS_VSCROLL, 0, padX+60, y+16, contentW-80, 200, idProfileCombo)
+	y += groupH + gapY
+
 	// --- 1. Overlay ---
-	groupH := int32(78)
+	groupH = int32(78)
 	groupBox("Overlay", padX, y, contentW, groupH)
 	add("BUTTON", "Enable Overlay", win.BS_AUTOCHECKBOX, 0, padX+12, y+20, 120, rowH, idEnabled)
 	add("BUTTON", "Calibration", win.BS_AUTOCHECKBOX, 0, padX+140, y+20, 100, rowH, idCalib)
@@ -371,6 +419,10 @@ func (f *form) buildControls() {
 	add("BUTTON", "←", win.BS_PUSHBUTTON, 0, ax, ay+padCell+padGap, padCell, padCell, idLeft)
 	add("BUTTON", "→", win.BS_PUSHBUTTON, 0, ax+2*(padCell+padGap), ay+padCell+padGap, padCell, padCell, idRight)
 	add("BUTTON", "↓", win.BS_PUSHBUTTON, 0, ax+padCell+padGap, ay+2*(padCell+padGap), padCell, padCell, idDown)
+	f.wireHoldButton(idUp, holdPos, 0, -1)
+	f.wireHoldButton(idDown, holdPos, 0, 1)
+	f.wireHoldButton(idLeft, holdPos, -1, 0)
+	f.wireHoldButton(idRight, holdPos, 1, 0)
 	y += groupH + gapY
 
 	// --- 3. Size (aligned label | − | value | + columns) ---
@@ -396,6 +448,10 @@ func (f *form) buildControls() {
 	add("BUTTON", "H−", win.BS_PUSHBUTTON, 0, szM, gy, szBtn, rowH, idHM)
 	add("STATIC", "300", win.SS_CENTER|win.SS_CENTERIMAGE, win.WS_EX_CLIENTEDGE, szV, gy, szVal, rowH, idHDisp)
 	add("BUTTON", "H+", win.BS_PUSHBUTTON, 0, szP, gy, szBtn, rowH, idHP)
+	f.wireHoldButton(idWP, holdSize, 1, 0)
+	f.wireHoldButton(idWM, holdSize, -1, 0)
+	f.wireHoldButton(idHP, holdSize, 0, 1)
+	f.wireHoldButton(idHM, holdSize, 0, -1)
 	// bottom pad ≈ groupH - (14 + 28 + rowH) ≈ 14px
 	y += groupH + gapY
 
@@ -432,7 +488,13 @@ func (f *form) buildControls() {
 	actY := y + (groupH-actH)/2 + 4 // optically center in groupbox
 	add("BUTTON", "Save", win.BS_DEFPUSHBUTTON, 0, actX, actY, actW, actH, idSave)
 	add("BUTTON", "Reset", win.BS_PUSHBUTTON, 0, actX+actW+actGap, actY, actW, actH, idReset)
-	// padBottom pixels remain empty below this group (see winH).
+	y += groupH + padBottom
+
+	// --- 6. Footer: status left | © center | version right ---
+	const footCol = contentW / 3
+	add("STATIC", "Ready", 0, 0, padX, y, footCol, footerH, idStatus)
+	add("STATIC", "© 2026 Mew", win.SS_CENTER, 0, padX+footCol, y, footCol, footerH, idFooterCopy)
+	add("STATIC", version.String(), win.SS_RIGHT, 0, padX+2*footCol, y, contentW-2*footCol, footerH, idFooterVer)
 }
 
 func mainWndProc(hwnd win.HWND, msg uint32, wParam, lParam uintptr) uintptr {
@@ -467,6 +529,11 @@ func mainWndProc(hwnd win.HWND, msg uint32, wParam, lParam uintptr) uintptr {
 			f.applyLive()
 		}
 		return 0
+	case win.WM_TIMER:
+		if f != nil && wParam == holdTimerID {
+			f.onHoldTimer()
+			return 0
+		}
 	case win.WM_COMMAND:
 		if f == nil {
 			break
@@ -499,6 +566,18 @@ func mainWndProc(hwnd win.HWND, msg uint32, wParam, lParam uintptr) uintptr {
 			if notify == win.BN_CLICKED {
 				f.onReset()
 			}
+		case idProfileNew:
+			f.onProfileNew()
+		case idProfileDuplicate:
+			f.onProfileDuplicate()
+		case idProfileRename:
+			f.onProfileRename()
+		case idProfileDelete:
+			f.onProfileDelete()
+		case idProfileCombo:
+			if notify == win.CBN_SELCHANGE {
+				f.onProfileSelect()
+			}
 		case idMenuExit:
 			win.DestroyWindow(f.hwnd)
 		case idAbout:
@@ -511,22 +590,7 @@ func mainWndProc(hwnd win.HWND, msg uint32, wParam, lParam uintptr) uintptr {
 			if notify == win.BN_CLICKED {
 				f.onPickColor()
 			}
-		case idUp:
-			f.nudgePos(0, -1)
-		case idDown:
-			f.nudgePos(0, 1)
-		case idLeft:
-			f.nudgePos(-1, 0)
-		case idRight:
-			f.nudgePos(1, 0)
-		case idWP:
-			f.nudgeSize(10, 0)
-		case idWM:
-			f.nudgeSize(-10, 0)
-		case idHP:
-			f.nudgeSize(0, 10)
-		case idHM:
-			f.nudgeSize(0, -10)
+		// D-pad / Size: hold subclass handles nudges (avoid double-fire on BN_CLICKED).
 		case idX, idY, idW, idH, idStep, idColor, idThick, idOpacity:
 			if notify == win.EN_CHANGE && !f.updating {
 				if id == idOpacity {
@@ -543,6 +607,9 @@ func mainWndProc(hwnd win.HWND, msg uint32, wParam, lParam uintptr) uintptr {
 		}
 		return 0
 	case win.WM_DESTROY:
+		if f != nil {
+			f.stopHold()
+		}
 		win.PostQuitMessage(0)
 		return 0
 	}
@@ -557,8 +624,11 @@ func (f *form) ctrl(id int) win.HWND {
 	return win.GetDlgItem(f.hwnd, int32(id))
 }
 
-func (f *form) setStatus(string) {
-	// Status group removed; keep call sites for future toast/title if needed.
+func (f *form) setStatus(s string) {
+	if f.hwnd == 0 {
+		return
+	}
+	f.setText(idStatus, s)
 }
 
 func (f *form) getText(id int) string {
@@ -966,4 +1036,325 @@ func mustValidPos(c config.OverlayConfig) config.OverlayConfig {
 	c.Color = "#00FFFF"
 	v, _ := config.Validate(c)
 	return v
+}
+
+func (f *form) wireHoldButton(id, kind, a, b int) {
+	hwnd := f.ctrl(id)
+	if hwnd == 0 {
+		return
+	}
+	holdBtnForm[hwnd] = f
+	holdBtnAct[hwnd] = [3]int{kind, a, b}
+	orig := win.SetWindowLongPtr(hwnd, win.GWLP_WNDPROC, holdBtnCallback)
+	holdBtnOrig[hwnd] = orig
+}
+
+func holdBtnProc(hwnd win.HWND, msg uint32, wParam, lParam uintptr) uintptr {
+	orig := holdBtnOrig[hwnd]
+	f := holdBtnForm[hwnd]
+	switch msg {
+	case win.WM_LBUTTONDOWN:
+		if f != nil {
+			act := holdBtnAct[hwnd]
+			f.startHold(act[0], act[1], act[2])
+		}
+	case win.WM_LBUTTONUP, win.WM_CAPTURECHANGED:
+		if f != nil {
+			f.stopHold()
+		}
+	case win.WM_DESTROY:
+		delete(holdBtnOrig, hwnd)
+		delete(holdBtnForm, hwnd)
+		delete(holdBtnAct, hwnd)
+	}
+	if orig != 0 {
+		return win.CallWindowProc(orig, hwnd, msg, wParam, lParam)
+	}
+	return win.DefWindowProc(hwnd, msg, wParam, lParam)
+}
+
+func (f *form) startHold(kind, a, b int) {
+	f.stopHold()
+	f.holdKind = kind
+	f.holdA, f.holdB = a, b
+	f.holdRepeating = false
+	f.doHoldNudge()
+	win.SetTimer(f.hwnd, holdTimerID, holdDelayMs, 0)
+}
+
+func (f *form) stopHold() {
+	win.KillTimer(f.hwnd, holdTimerID)
+	f.holdKind = holdNone
+	f.holdRepeating = false
+}
+
+func (f *form) onHoldTimer() {
+	if f.holdKind == holdNone {
+		return
+	}
+	f.doHoldNudge()
+	if !f.holdRepeating {
+		f.holdRepeating = true
+		win.SetTimer(f.hwnd, holdTimerID, holdRepeatMs, 0)
+	}
+}
+
+func (f *form) doHoldNudge() {
+	switch f.holdKind {
+	case holdPos:
+		f.nudgePos(f.holdA, f.holdB)
+	case holdSize:
+		f.nudgeSize(f.holdA, f.holdB)
+	}
+}
+
+func (f *form) refreshProfileCombo() {
+	cb := f.ctrl(idProfileCombo)
+	win.SendMessage(cb, win.CB_RESETCONTENT, 0, 0)
+	active := f.svc.ActiveProfile()
+	sel := 0
+	for i, name := range f.svc.ListProfiles() {
+		p, _ := syscall.UTF16PtrFromString(name)
+		win.SendMessage(cb, win.CB_ADDSTRING, 0, uintptr(unsafe.Pointer(p)))
+		if name == active {
+			sel = i
+		}
+	}
+	win.SendMessage(cb, win.CB_SETCURSEL, uintptr(sel), 0)
+}
+
+func (f *form) comboSelectedProfile() string {
+	cb := f.ctrl(idProfileCombo)
+	idx := int(win.SendMessage(cb, win.CB_GETCURSEL, 0, 0))
+	if idx < 0 {
+		return ""
+	}
+	names := f.svc.ListProfiles()
+	if idx >= len(names) {
+		return ""
+	}
+	return names[idx]
+}
+
+func (f *form) flushActiveProfile() {
+	c, err := f.readCfg()
+	if err != nil {
+		c = f.svc.GetConfig()
+	}
+	_ = f.svc.UpdateOverlayConfig(c)
+}
+
+func (f *form) onProfileSelect() {
+	name := f.comboSelectedProfile()
+	if name == "" || name == f.svc.ActiveProfile() {
+		return
+	}
+	f.flushActiveProfile()
+	if err := f.svc.SetActiveProfile(name); err != nil {
+		f.setStatus(statusForErr(err))
+		f.refreshProfileCombo()
+		return
+	}
+	f.loadFields(f.svc.GetConfig())
+	f.setStatus("Profile: " + name)
+}
+
+func (f *form) onProfileNew() {
+	name, ok := promptProfileName(f.hwnd, f.font, "New Profile", "")
+	if !ok {
+		return
+	}
+	f.flushActiveProfile()
+	if err := f.svc.CreateProfile(name); err != nil {
+		win.MessageBox(f.hwnd, utf16Ptr(err.Error()), utf16Ptr("New Profile"), win.MB_OK|win.MB_ICONWARNING)
+		return
+	}
+	f.refreshProfileCombo()
+	f.loadFields(f.svc.GetConfig())
+	f.setStatus("Created " + name)
+}
+
+func (f *form) onProfileDuplicate() {
+	cur := f.svc.ActiveProfile()
+	suggest := cur + " copy"
+	name, ok := promptProfileName(f.hwnd, f.font, "Duplicate Profile", suggest)
+	if !ok {
+		return
+	}
+	f.flushActiveProfile()
+	if err := f.svc.CreateProfile(name); err != nil {
+		win.MessageBox(f.hwnd, utf16Ptr(err.Error()), utf16Ptr("Duplicate Profile"), win.MB_OK|win.MB_ICONWARNING)
+		return
+	}
+	f.refreshProfileCombo()
+	f.loadFields(f.svc.GetConfig())
+	f.setStatus("Duplicated as " + name)
+}
+
+func (f *form) onProfileRename() {
+	cur := f.svc.ActiveProfile()
+	if cur == config.DefaultProfileName {
+		win.MessageBox(f.hwnd, utf16Ptr("Cannot rename the default profile."), utf16Ptr("Rename Profile"), win.MB_OK|win.MB_ICONINFORMATION)
+		return
+	}
+	name, ok := promptProfileName(f.hwnd, f.font, "Rename Profile", cur)
+	if !ok {
+		return
+	}
+	f.flushActiveProfile()
+	if err := f.svc.RenameProfile(cur, name); err != nil {
+		win.MessageBox(f.hwnd, utf16Ptr(err.Error()), utf16Ptr("Rename Profile"), win.MB_OK|win.MB_ICONWARNING)
+		return
+	}
+	f.refreshProfileCombo()
+	f.setStatus("Renamed to " + name)
+}
+
+func (f *form) onProfileDelete() {
+	name := f.svc.ActiveProfile()
+	if name == config.DefaultProfileName {
+		win.MessageBox(f.hwnd, utf16Ptr("Cannot delete the default profile."), utf16Ptr("Delete Profile"), win.MB_OK|win.MB_ICONINFORMATION)
+		return
+	}
+	msg := "Delete profile \"" + name + "\"?"
+	if win.MessageBox(f.hwnd, utf16Ptr(msg), utf16Ptr("Delete Profile"), win.MB_YESNO|win.MB_ICONQUESTION) != win.IDYES {
+		return
+	}
+	if err := f.svc.DeleteProfile(name); err != nil {
+		win.MessageBox(f.hwnd, utf16Ptr(err.Error()), utf16Ptr("Delete Profile"), win.MB_OK|win.MB_ICONWARNING)
+		return
+	}
+	f.refreshProfileCombo()
+	f.loadFields(f.svc.GetConfig())
+	f.setStatus("Deleted " + name)
+}
+
+const (
+	classPrompt    = "VUtilsProfilePrompt"
+	idPromptEdit   = 1
+	idPromptOK     = 2
+	idPromptCancel = 3
+)
+
+type promptState struct {
+	hwnd   win.HWND
+	edit   win.HWND
+	result string
+	ok     bool
+	done   bool
+}
+
+var promptByHWND = map[win.HWND]*promptState{}
+
+func promptProfileName(owner win.HWND, font win.HFONT, title, initial string) (string, bool) {
+	instance := win.GetModuleHandle(nil)
+	registerPromptClass(instance)
+
+	var pr promptState
+	hwnd := win.CreateWindowEx(
+		win.WS_EX_DLGMODALFRAME,
+		utf16Ptr(classPrompt),
+		utf16Ptr(title),
+		win.WS_POPUP|win.WS_CAPTION|win.WS_SYSMENU|win.WS_VISIBLE,
+		0, 0, 320, 140,
+		owner, 0, instance, nil,
+	)
+	if hwnd == 0 {
+		return "", false
+	}
+	pr.hwnd = hwnd
+	promptByHWND[hwnd] = &pr
+	defer delete(promptByHWND, hwnd)
+
+	// Center over owner.
+	var orc, rc win.RECT
+	win.GetWindowRect(owner, &orc)
+	win.GetWindowRect(hwnd, &rc)
+	w := rc.Right - rc.Left
+	h := rc.Bottom - rc.Top
+	win.SetWindowPos(hwnd, 0,
+		orc.Left+(orc.Right-orc.Left-w)/2,
+		orc.Top+(orc.Bottom-orc.Top-h)/2,
+		0, 0, win.SWP_NOSIZE|win.SWP_NOZORDER)
+
+	add := func(class, text string, style uint32, x, y, cw, ch, id int32) win.HWND {
+		child := win.CreateWindowEx(0, utf16Ptr(class), utf16Ptr(text),
+			win.WS_CHILD|win.WS_VISIBLE|style, x, y, cw, ch, hwnd, win.HMENU(id), instance, nil)
+		if font != 0 {
+			win.SendMessage(child, win.WM_SETFONT, uintptr(font), 1)
+		}
+		return child
+	}
+	add("STATIC", "Name:", 0, 16, 18, 48, 22, 0)
+	pr.edit = add("EDIT", initial, win.WS_BORDER|win.ES_AUTOHSCROLL, 70, 16, 220, 24, idPromptEdit)
+	win.SendMessage(pr.edit, win.EM_SETLIMITTEXT, 64, 0)
+	if initial != "" {
+		win.SendMessage(pr.edit, win.EM_SETSEL, 0, ^uintptr(0)) // select all for easy overwrite
+	}
+	add("BUTTON", "OK", win.BS_DEFPUSHBUTTON, 120, 60, 80, 26, idPromptOK)
+	add("BUTTON", "Cancel", win.BS_PUSHBUTTON, 210, 60, 80, 26, idPromptCancel)
+	win.SetFocus(pr.edit)
+	win.EnableWindow(owner, false)
+
+	var msg win.MSG
+	for !pr.done && win.GetMessage(&msg, 0, 0, 0) > 0 {
+		if !win.IsDialogMessage(hwnd, &msg) {
+			win.TranslateMessage(&msg)
+			win.DispatchMessage(&msg)
+		}
+	}
+	win.EnableWindow(owner, true)
+	win.SetFocus(owner)
+	return pr.result, pr.ok
+}
+
+func registerPromptClass(instance win.HINSTANCE) {
+	var wc win.WNDCLASSEX
+	wc.CbSize = uint32(unsafe.Sizeof(wc))
+	wc.LpfnWndProc = syscall.NewCallback(promptWndProc)
+	wc.HInstance = instance
+	wc.HCursor = win.LoadCursor(0, win.MAKEINTRESOURCE(win.IDC_ARROW))
+	wc.HbrBackground = win.COLOR_BTNFACE + 1
+	wc.LpszClassName = utf16Ptr(classPrompt)
+	if atom := win.RegisterClassEx(&wc); atom == 0 {
+		_ = win.GetLastError() // already registered is fine
+	}
+}
+
+func promptWndProc(hwnd win.HWND, msg uint32, wParam, lParam uintptr) uintptr {
+	pr := promptByHWND[hwnd]
+	switch msg {
+	case win.WM_COMMAND:
+		id := int(win.LOWORD(uint32(wParam)))
+		switch id {
+		case idPromptOK:
+			if pr != nil {
+				pr.result = strings.TrimSpace(getWindowText(pr.edit))
+				if pr.result == "" {
+					return 0
+				}
+				pr.ok = true
+				pr.done = true
+			}
+			win.DestroyWindow(hwnd)
+			return 0
+		case idPromptCancel:
+			if pr != nil {
+				pr.done = true
+			}
+			win.DestroyWindow(hwnd)
+			return 0
+		}
+	case win.WM_CLOSE:
+		if pr != nil {
+			pr.done = true
+		}
+		win.DestroyWindow(hwnd)
+		return 0
+	case win.WM_DESTROY:
+		if pr != nil {
+			pr.done = true
+		}
+	}
+	return win.DefWindowProc(hwnd, msg, wParam, lParam)
 }

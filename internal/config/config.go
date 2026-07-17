@@ -7,13 +7,16 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 )
 
 //go:embed default.json
 var defaultJSON []byte
 
-// OverlayConfig is the persisted minimap guide overlay settings.
+const DefaultProfileName = "default"
+
+// OverlayConfig is one profile's minimap guide overlay settings.
 type OverlayConfig struct {
 	MapX           int     `json:"mapX"`
 	MapY           int     `json:"mapY"`
@@ -28,6 +31,12 @@ type OverlayConfig struct {
 	CircleMode     bool    `json:"circleMode"`     // calibration border: circle instead of rectangle
 	ShowHorizontal bool    `json:"showHorizontal"` // crosshair horizontal arm
 	ShowVertical   bool    `json:"showVertical"`   // crosshair vertical arm
+}
+
+// Store is the persisted multi-profile config file.
+type Store struct {
+	ActiveProfile string                   `json:"activeProfile"`
+	Profiles      map[string]OverlayConfig `json:"profiles"`
 }
 
 var colorRe = regexp.MustCompile(`(?i)^#[0-9a-f]{6}$`)
@@ -45,6 +54,14 @@ func Default() OverlayConfig {
 	}
 	c, _ = Validate(c)
 	return c
+}
+
+// DefaultStore returns a store with a single default profile.
+func DefaultStore() Store {
+	return Store{
+		ActiveProfile: DefaultProfileName,
+		Profiles:      map[string]OverlayConfig{DefaultProfileName: Default()},
+	}
 }
 
 // Validate checks config values and returns a sanitized copy or an error.
@@ -72,19 +89,73 @@ func Validate(c OverlayConfig) (OverlayConfig, error) {
 	return c, nil
 }
 
-// Load reads OverlayConfig from a JSON file.
-func Load(path string) (OverlayConfig, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return OverlayConfig{}, err
+// ValidateProfileName rejects empty names and path separators.
+func ValidateProfileName(name string) error {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return fmt.Errorf("profile name is empty")
 	}
-	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
-		return OverlayConfig{}, fmt.Errorf("parse config: %w", err)
+	if strings.ContainsAny(name, `/\:*?|"<>`) {
+		return fmt.Errorf("profile name has invalid characters")
 	}
+	return nil
+}
+
+// Normalize ensures default profile exists, validates profiles, and fixes active.
+func Normalize(s Store) (Store, error) {
+	if s.Profiles == nil {
+		s.Profiles = map[string]OverlayConfig{}
+	}
+	if _, ok := s.Profiles[DefaultProfileName]; !ok {
+		s.Profiles[DefaultProfileName] = Default()
+	}
+	for name, c := range s.Profiles {
+		validated, err := Validate(c)
+		if err != nil {
+			return Store{}, fmt.Errorf("profile %q: %w", name, err)
+		}
+		s.Profiles[name] = validated
+	}
+	if s.ActiveProfile == "" {
+		s.ActiveProfile = DefaultProfileName
+	}
+	if _, ok := s.Profiles[s.ActiveProfile]; !ok {
+		s.ActiveProfile = DefaultProfileName
+	}
+	return s, nil
+}
+
+// Active returns the active profile's overlay config.
+func Active(s Store) OverlayConfig {
+	if c, ok := s.Profiles[s.ActiveProfile]; ok {
+		return c
+	}
+	if c, ok := s.Profiles[DefaultProfileName]; ok {
+		return c
+	}
+	return Default()
+}
+
+// ProfileNames returns sorted profile names with "default" first.
+func ProfileNames(s Store) []string {
+	names := make([]string, 0, len(s.Profiles))
+	for name := range s.Profiles {
+		if name != DefaultProfileName {
+			names = append(names, name)
+		}
+	}
+	sort.Strings(names)
+	out := make([]string, 0, 1+len(names))
+	if _, ok := s.Profiles[DefaultProfileName]; ok {
+		out = append(out, DefaultProfileName)
+	}
+	return append(out, names...)
+}
+
+func decodeOverlay(data []byte, raw map[string]json.RawMessage) (OverlayConfig, error) {
 	var c OverlayConfig
 	if err := json.Unmarshal(data, &c); err != nil {
-		return OverlayConfig{}, fmt.Errorf("parse config: %w", err)
+		return OverlayConfig{}, err
 	}
 	// Old configs omit these keys; default show both arms.
 	if _, ok := raw["showHorizontal"]; !ok {
@@ -96,13 +167,71 @@ func Load(path string) (OverlayConfig, error) {
 	return Validate(c)
 }
 
-// Save writes OverlayConfig as indented JSON.
-func Save(path string, c OverlayConfig) error {
-	c, err := Validate(c)
+// Load reads a Store from JSON. Flat OverlayConfig files migrate into profiles.default
+// in memory only — use LoadOrDefault to also rewrite the file.
+func Load(path string) (Store, error) {
+	s, _, err := load(path)
+	return s, err
+}
+
+// load returns the store and whether the on-disk file was a legacy flat config.
+func load(path string) (Store, bool, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return Store{}, false, err
+	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return Store{}, false, fmt.Errorf("parse config: %w", err)
+	}
+
+	if _, hasProfiles := raw["profiles"]; hasProfiles {
+		var s Store
+		if err := json.Unmarshal(data, &s); err != nil {
+			return Store{}, false, fmt.Errorf("parse config: %w", err)
+		}
+		// Apply omitted show* defaults per profile.
+		for name, c := range s.Profiles {
+			profRaw := map[string]json.RawMessage{}
+			if pr, ok := raw["profiles"]; ok {
+				var profiles map[string]json.RawMessage
+				if json.Unmarshal(pr, &profiles) == nil {
+					if one, ok := profiles[name]; ok {
+						_ = json.Unmarshal(one, &profRaw)
+					}
+				}
+			}
+			if _, ok := profRaw["showHorizontal"]; !ok {
+				c.ShowHorizontal = true
+			}
+			if _, ok := profRaw["showVertical"]; !ok {
+				c.ShowVertical = true
+			}
+			s.Profiles[name] = c
+		}
+		s, err := Normalize(s)
+		return s, false, err
+	}
+
+	// Flat legacy config → wrap as default profile.
+	c, err := decodeOverlay(data, raw)
+	if err != nil {
+		return Store{}, false, fmt.Errorf("parse config: %w", err)
+	}
+	s, err := Normalize(Store{
+		ActiveProfile: DefaultProfileName,
+		Profiles:      map[string]OverlayConfig{DefaultProfileName: c},
+	})
+	return s, true, err
+}
+
+// Save writes Store as indented JSON.
+func Save(path string, s Store) error {
+	s, err := Normalize(s)
 	if err != nil {
 		return err
 	}
-	data, err := json.MarshalIndent(c, "", "  ")
+	data, err := json.MarshalIndent(s, "", "  ")
 	if err != nil {
 		return err
 	}
@@ -122,20 +251,26 @@ func DefaultPath() string {
 	return filepath.Join(home, ".vutils", "config.json")
 }
 
-// LoadOrDefault loads path, or writes and returns Default if the file is missing.
-func LoadOrDefault(path string) (OverlayConfig, error) {
-	c, err := Load(path)
+// LoadOrDefault loads path, or writes DefaultStore if missing.
+// Legacy flat configs are migrated to the profiles store and rewritten on disk.
+func LoadOrDefault(path string) (Store, error) {
+	s, migrated, err := load(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			c = Default()
-			if err := Save(path, c); err != nil {
-				return OverlayConfig{}, fmt.Errorf("write default config: %w", err)
+			s = DefaultStore()
+			if err := Save(path, s); err != nil {
+				return Store{}, fmt.Errorf("write default config: %w", err)
 			}
-			return c, nil
+			return s, nil
 		}
-		return OverlayConfig{}, err
+		return Store{}, err
 	}
-	return c, nil
+	if migrated {
+		if err := Save(path, s); err != nil {
+			return Store{}, fmt.Errorf("migrate config: %w", err)
+		}
+	}
+	return s, nil
 }
 
 // ResolvePath returns the config path under the user home (.vutils/config.json).
