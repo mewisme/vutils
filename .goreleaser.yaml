@@ -63,6 +63,9 @@ scoops:
     description: "Standalone Windows minimap guide overlay (no Valorant process access)"
     license: MIT
     goamd64: v1
+    # Start Menu entry so Windows search finds the GUI (not only PATH shim).
+    shortcuts:
+      - ["vutils.exe", "Valorant Utils"]
     skip_upload: true
     repository:
       owner: mewisme
